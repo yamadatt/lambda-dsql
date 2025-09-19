@@ -1,0 +1,23 @@
+# Environment variables
+#env.local.json
+.env
+.env.local
+
+# AWS SAM
+.aws-sam/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Node.js
+node_modules/

@@ -1,0 +1,179 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: ボタンクリックタイムスタンプ記録アプリケーション
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 256
+    Environment:
+      Variables:
+        DATABASE_NAME: postgres
+
+Resources:
+  # Amazon DSQL クラスター（再作成版）
+  DSQLCluster:
+    Type: AWS::DSQL::Cluster
+    Properties:
+      DeletionProtectionEnabled: false
+      Tags:
+        - Key: Name
+          Value: button-timestamp-cluster-v2
+        - Key: CreatedFor
+          Value: Lambda-DSQL-Integration-Fix
+
+  # パラメータストア（データベース認証情報）
+  DBUsernameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /button-timestamp-recorder/db/username
+      Type: String
+      Value: admin
+      Description: Database username
+
+  DBPasswordParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /button-timestamp-recorder/db/password
+      Type: String
+      Value: ButtonTimestamp2024
+      Description: Database password
+
+  # Lambda関数（SAM形式）
+  RecordTimestampFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: button-timestamp-recorder
+      Runtime: provided.al2023
+      Handler: bootstrap
+      CodeUri: functions/record-timestamp/
+      Environment:
+        Variables:
+          DSQL_CLUSTER_IDENTIFIER: !Ref DSQLCluster
+          DATABASE_NAME: postgres
+          DB_USERNAME_PARAM: /button-timestamp-recorder/db/username
+          DB_PASSWORD_PARAM: /button-timestamp-recorder/db/password
+      Role: !GetAtt RecordTimestampFunctionRole.Arn
+    Metadata:
+      BuildMethod: makefile
+
+  # Lambda実行ロール
+  RecordTimestampFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DSQLAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dsql:GenerateDBConnectAuthToken
+                  - dsql:GenerateDBConnectAdminAuthToken
+                  - dsql:DbConnect
+                  - dsql:DbConnectAdmin
+                Resource:
+                  - !Sub 'arn:aws:dsql:${AWS::Region}:${AWS::AccountId}:cluster/${DSQLCluster}'
+                  - !Sub 'arn:aws:dsql:${AWS::Region}:${AWS::AccountId}:cluster/${DSQLCluster}/*'
+              - Effect: Allow
+                Action:
+                  - dsql:*
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                Resource:
+                  - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/button-timestamp-recorder/db/*'
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:dsql-test-credentials*'
+
+  # SAM API Gateway
+  ButtonTimestampApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: Prod
+      Cors:
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowHeaders: "'Content-Type'"
+        AllowOrigin: "'*'"
+      DefinitionBody:
+        swagger: "2.0"
+        info:
+          title: Button Timestamp API
+        paths:
+          /record:
+            post:
+              x-amazon-apigateway-integration:
+                uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${RecordTimestampFunction.Arn}/invocations'
+                passthroughBehavior: when_no_match
+                httpMethod: POST
+                type: aws_proxy
+              responses: {}
+            options:
+              x-amazon-apigateway-integration:
+                uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${RecordTimestampFunction.Arn}/invocations'
+                passthroughBehavior: when_no_match
+                httpMethod: POST
+                type: aws_proxy
+              responses: {}
+
+  # Lambda API Gateway権限
+  RecordTimestampFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref RecordTimestampFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ButtonTimestampApi}/*/*'
+
+  # S3バケット（フロントエンド用）
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'button-timestamp-frontend-${AWS::AccountId}'
+      WebsiteConfiguration:
+        IndexDocument: index.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+
+  # S3バケットポリシー
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Statement:
+          - Sid: PublicReadGetObject
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub '${FrontendBucket.Arn}/*'
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway エンドポイント URL
+    Value: !Sub "https://${ButtonTimestampApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/record"
+
+  DSQLClusterIdentifier:
+    Description: DSQL クラスター識別子
+    Value: !Ref DSQLCluster
+
+  WebsiteURL:
+    Description: フロントエンドWebサイトURL
+    Value: !GetAtt FrontendBucket.WebsiteURL

@@ -1,0 +1,23 @@
+{
+  "resource": "/record",
+  "path": "/record",
+  "httpMethod": "POST",
+  "headers": {
+    "Content-Type": "application/json",
+    "User-Agent": "sam-local-test"
+  },
+  "multiValueHeaders": {},
+  "queryStringParameters": null,
+  "multiValueQueryStringParameters": null,
+  "pathParameters": null,
+  "stageVariables": null,
+  "requestContext": {
+    "identity": {
+      "sourceIp": "203.0.113.10",
+      "userAgent": "sam-local-test"
+    }
+  },
+  "body": "{\"action\":\"record\"}",
+  "isBase64Encoded": false
+}
+

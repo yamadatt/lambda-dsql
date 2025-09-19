@@ -1,0 +1,80 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Aurora DSQL Version Query Lambda Function with API Gateway
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 256
+    Runtime: provided.al2023
+    Architectures:
+    - x86_64
+    Environment:
+      Variables:
+        GOOS: linux
+        GOARCH: amd64
+Resources:
+  DSQLVersionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: dsql-version-function
+      CodeUri: DSQLVersionFunction
+      Handler: bootstrap
+      Description: Query Aurora DSQL button clicks information
+      Environment:
+        Variables:
+          DSQL_ENDPOINT: guabumyfv3jxv2ymjmqtbjqmjq.dsql.ap-northeast-1.on.aws
+          DSQL_REGION: ap-northeast-1
+          DSQL_DATABASE: postgres
+          DSQL_USER: admin
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            Path: /version
+            Method: GET
+            RestApiId:
+              Ref: DSQLApi
+      Policies:
+      - Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action:
+          - dsql:DbConnect
+          - dsql:DbConnectAdmin
+          Resource: '*'
+        - Effect: Allow
+          Action:
+          - kms:Decrypt
+          - kms:DescribeKey
+          Resource: '*'
+    Metadata:
+      SamResourceId: DSQLVersionFunction
+  DSQLApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: dsql-version-api
+      Description: API Gateway for Aurora DSQL Version Query
+      StageName: prod
+      Cors:
+        AllowMethods: '''GET,POST,OPTIONS'''
+        AllowHeaders: '''Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'''
+        AllowOrigin: '''*'''
+      EndpointConfiguration:
+        Type: REGIONAL
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint URL
+    Value:
+      Fn::Sub: https://${DSQLApi}.execute-api.${AWS::Region}.amazonaws.com/prod/version
+    Export:
+      Name:
+        Fn::Sub: ${AWS::StackName}-api-endpoint
+  FunctionArn:
+    Description: Lambda Function ARN
+    Value:
+      Fn::GetAtt:
+      - DSQLVersionFunction
+      - Arn
+    Export:
+      Name:
+        Fn::Sub: ${AWS::StackName}-function-arn

@@ -1,0 +1,161 @@
+#!/bin/bash
+
+# DSQL クエリ実行ツール
+# 使用方法: ./dsql-query "SQL文"
+
+if [ $# -eq 0 ]; then
+    echo "📋 DSQL クエリ実行ツール"
+    echo ""
+    echo "使用方法:"
+    echo "  $0 \"SQL文\""
+    echo ""
+    echo "例:"
+    echo "  $0 \"SELECT * FROM button_clicks;\""
+    echo "  $0 \"SELECT COUNT(*) FROM button_clicks;\""
+    echo "  $0 \"SELECT action, COUNT(*) FROM button_clicks GROUP BY action;\""
+    echo "  $0 \"SELECT * FROM button_clicks WHERE id = 1;\""
+    echo ""
+    exit 1
+fi
+
+SQL_QUERY="$1"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+echo "🔍 SQL実行中: $SQL_QUERY"
+echo ""
+
+# 一時的なGoファイルを作成
+TMP_FILE=$(mktemp /tmp/dsql_query_XXXXXX.go)
+
+cat > "$TMP_FILE" << 'EOF'
+package main
+
+import (
+	"database/sql"
+	"fmt"
+	"log"
+	"os"
+	"os/exec"
+	"strings"
+	"time"
+	_ "github.com/lib/pq"
+)
+
+const (
+	clusterID = "baabumxlegra2drhyb7t77y4cq"
+	region    = "ap-northeast-1"
+	database  = "postgres"
+	username  = "admin"
+)
+
+func generateAuthToken(hostname string) (string, error) {
+	cmd := exec.Command("aws", "dsql", "generate-db-connect-admin-auth-token",
+		"--hostname", hostname,
+		"--region", region,
+		"--expires-in", "3600",
+		"--output", "text")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to generate auth token: %v", err)
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
+func main() {
+	if len(os.Args) < 2 {
+		log.Fatal("SQL文が指定されていません")
+	}
+
+	query := os.Args[1]
+
+	hostname := fmt.Sprintf("%s.dsql.%s.on.aws", clusterID, region)
+	token, err := generateAuthToken(hostname)
+	if err != nil {
+		log.Fatalf("❌ 認証エラー: %v", err)
+	}
+
+	connStr := fmt.Sprintf("host=%s port=5432 dbname=%s user=%s password=%s sslmode=require",
+		hostname, database, username, token)
+
+	db, err := sql.Open("postgres", connStr)
+	if err != nil {
+		log.Fatalf("❌ 接続エラー: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.Ping(); err != nil {
+		log.Fatalf("❌ 接続テストエラー: %v", err)
+	}
+
+	rows, err := db.Query(query)
+	if err != nil {
+		log.Fatalf("❌ クエリエラー: %v", err)
+	}
+	defer rows.Close()
+
+	columns, err := rows.Columns()
+	if err != nil {
+		log.Fatalf("❌ カラム取得エラー: %v", err)
+	}
+
+	// ヘッダー表示
+	for i, col := range columns {
+		if i > 0 { fmt.Print(" | ") }
+		fmt.Printf("%-20s", col)
+	}
+	fmt.Println()
+	fmt.Println(strings.Repeat("-", len(columns)*23))
+
+	// データ表示
+	for rows.Next() {
+		values := make([]interface{}, len(columns))
+		valuePtrs := make([]interface{}, len(columns))
+		for i := range values {
+			valuePtrs[i] = &values[i]
+		}
+
+		err := rows.Scan(valuePtrs...)
+		if err != nil {
+			log.Fatalf("❌ スキャンエラー: %v", err)
+		}
+
+		for i, val := range values {
+			if i > 0 { fmt.Print(" | ") }
+			var displayValue string
+			if val == nil {
+				displayValue = "NULL"
+			} else {
+				switch v := val.(type) {
+				case time.Time:
+					displayValue = v.Format("2006-01-02 15:04:05")
+				case []byte:
+					displayValue = string(v)
+				default:
+					displayValue = fmt.Sprintf("%v", v)
+				}
+			}
+			fmt.Printf("%-20s", displayValue)
+		}
+		fmt.Println()
+	}
+
+	if err = rows.Err(); err != nil {
+		log.Fatalf("❌ 行処理エラー: %v", err)
+	}
+
+	fmt.Println()
+	fmt.Println("✅ クエリ実行完了!")
+}
+EOF
+
+# go.modをコピーして一時的な作業ディレクトリで実行
+TMP_DIR=$(mktemp -d)
+cp "$SCRIPT_DIR/go.mod" "$TMP_DIR/"
+cp "$SCRIPT_DIR/go.sum" "$TMP_DIR/"
+cp "$TMP_FILE" "$TMP_DIR/main.go"
+
+cd "$TMP_DIR"
+go run main.go "$SQL_QUERY"
+
+# 一時ファイルを削除
+rm -rf "$TMP_DIR" "$TMP_FILE"

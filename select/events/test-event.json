@@ -1,0 +1,8 @@
+{
+  "httpMethod": "GET",
+  "path": "/version",
+  "headers": {
+    "Accept": "application/json"
+  },
+  "body": null
+}
